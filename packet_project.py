@@ -23,8 +23,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-# Begin common code
-# It currently doesn't seem to be easily possible to
 DOCUMENTATION = '''
 ---
 module: packet_project
