@@ -143,6 +143,7 @@ class PacketModule(AnsibleModule):
         spec = kwargs.get('argument_spec')
         if spec is None:
             spec = dict()
+            kwargs['argument_spec'] = spec
         spec.update(auth_token=dict(required=True, aliases=['api_token'],
                                     no_log=True))
         super(PacketModule, self).__init__(*args, **kwargs)
@@ -152,6 +153,9 @@ class PacketModule(AnsibleModule):
     def manager(self):
         """The object responsible for all comms with Packet"""
         if self._manager is None:
+            # Note: Lazy initialisation of the manager object isn't thread-safe
+            # but the same module object shouldn't be used in multiple threads
+            # simultaneously.
             self._manager = packet.Manager(
                 auth_token=self.params['auth_token']
             )
