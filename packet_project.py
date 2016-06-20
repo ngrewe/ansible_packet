@@ -94,14 +94,50 @@ except ImportError:
     HAS_PACKET = False
 
 
-class PacketModule(AnsibleModule):
+class PacketProperties(object):
+    if HAS_PACKET:
+        mapping = {
+            packet.Project.Project: (
+                'id',
+                'name',
+                'created_at',
+                'updated_at'
+                ),
+            packet.SSHKey.SSHKey: (
+                'id',
+                'label',
+                'created_at',
+                'updated_at',
+                'key',
+                'fignerprint'
+                )
+            }
+    else:
+        mapping = dict()
 
-    PROJECT_PROPERTIES = (
-        'id',
-        'name',
-        'created_at',
-        'updated_at'
-    )
+    @classmethod
+    def to_ansible(self, obj):
+        """Convert an packet API object into a dictionary presentation"""
+        try:
+            properties = self.mapping[type(obj)]
+        except KeyError:
+            properties = dict()
+        return dict((name, getattr(obj, name))
+                    for name in dir(obj)
+                    if name in properties)
+
+
+class PacketAction(object):
+
+    def apply(self):
+        """Apply the action to the API endpoint, returning the result
+
+        Subclasses need to override this method.
+        """
+        raise NotImplementedError
+
+
+class PacketModule(AnsibleModule):
 
     def __init__(self, *args, **kwargs):
         spec = kwargs.get('argument_spec')
@@ -125,68 +161,124 @@ class PacketModule(AnsibleModule):
     def is_packet_supported():
         return HAS_PACKET
 
+    def list_entities(self):
+        """Return the list of entities using the packet API
+
+        Subclasses must override this method.
+        """
+        raise NotImplementedError
+
+    def matched_entities(self, entities):
+        """Extracts the entity to work on from the list of entities returned
+
+        Subclasses must override this method.
+        """
+        raise NotImplementedError
+
+    def action_for_entity(self, entity):
+        """Returns an action object used for state synchronisation
+
+        Used to sync state with packet. Returns None if the state is already
+        synchronised, otherwise the returned instances should be of
+        :class:`PacketAction`.
+
+        Subclasses must override this method.
+        """
+        raise NotImplementedError
+
+    def execute_module(self):
+        """Execute the module
+
+        This method relies on the abstract methods in the class to implement
+        the default update process:
+
+        1. List the entities
+        2. Find the one matching the module invocation
+        3. Generate required state changes
+        4. Apply
+        """
+
+        if not self.is_packet_supported():
+            self.fail_json(msg="packet-python not installed")
+
+        try:
+            entities = self.list_entities()
+        except packet.baseapi.Error as e:
+            self.fail_json(msg=str(e))
+
+        matches = self.matched_entities(entities)
+        if (len(matches) > 1):
+            self.fail_json(msg="Named entity not unique", choices=matches)
+        elif not matches:
+            matched = None
+            result = dict()
+        else:
+            matched = matches[0]
+            result = PacketProperties.to_ansible(matches[0])
+        action = self.action_for_entity(matched)
+
+        if self.check_mode or not action:
+            self.exit_json(changed=(action is not None), **result)
+        try:
+            result = PacketProperties.to_ansible(action.apply())
+        except packet.baseapi.Error as e:
+            self.fail_json(msg=str(e))
+
+        self.exit_json(changed=True, **result)
+
 # End common code applying to all modules
 
 
-class Creation(object):
+class Creation(PacketAction):
 
     def __init__(self, manager, name):
         self._manager = manager
         self._name = name
+        super(Creation, self).__init__()
 
     def apply(self):
         return self._manager.create_project(self._name)
 
 
-class Deletion(object):
+class Deletion(PacketAction):
 
     def __init__(self, project):
         self._project = project
+        super(Deletion, self).__init__()
 
     def apply(self):
         self._project.delete()
 
 
-def project_as_result(obj):
-        if obj is None:
-            return dict()
-        return dict((name, getattr(obj, name))
-                    for name in dir(obj)
-                    if name in PacketModule.PROJECT_PROPERTIES)
+class PacketProjectModule(PacketModule):
+    def __init__(self, *args, **kwargs):
+        spec = kwargs.get('argument_spec')
+        if spec is None:
+            spec = dict()
+        spec.update(name=dict(required=True),
+                    state=dict(default='present',
+                    choices=['present', 'absent']),
+                    )
+        kwargs['supports_check_mode'] = True
+        kwargs['argument_spec'] = spec
+        super(PacketProjectModule, self).__init__(*args, **kwargs)
+
+    def list_entities(self):
+        return self.manager.list_projects()
+
+    def matched_entities(self, entities):
+        return [x for x in entities if x.name == self.params['name']]
+
+    def action_for_entity(self, entity):
+        if (self.params['state'] == 'present' and not entity):
+            return Creation(self.manager, self.params['name'])
+        elif (self.params['state'] == 'absent' and entity):
+            return Deletion(entity)
+        return None
 
 
 def main():
-    module = PacketModule(
-        argument_spec=dict(
-            name=dict(required=True),
-            state=dict(default='present', choices=['present', 'absent']),
-        ),
-        supports_check_mode=True
-    )
-
-    if not module.is_packet_supported():
-        module.fail_json(msg="packet-python not installed")
-
-    projects = module.manager.list_projects()
-    match = [x for x in projects if x.name == module.params['name']]
-    if not match:
-        result = dict()
-    else:
-        result = project_as_result(match[0])
-    changed = False
-    action = None
-    if (module.params['state'] == 'present' and not result):
-        changed = True
-        action = Creation(module.manager, module.params['name'])
-    elif (module.params['state'] == 'absent' and result):
-        changed = True
-        action = Deletion(match[0])
-
-    if module.check_mode or not changed:
-        module.exit_json(changed=changed, **result)
-
-    result = project_as_result(action.apply())
-    module.exit_json(changed=True, **result)
+    PacketProjectModule().execute_module()
 
 
 if __name__ == '__main__':
