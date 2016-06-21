@@ -1,6 +1,6 @@
 #!/usr/bin/python
 #
-# An ansible module for manipulating projects using
+# An ansible module for manipulating ssh keys using
 # [Packet's API](https://www.packet.net/resources/docs/)
 #
 # Copyright (c) 2016 Niels Grewe
@@ -25,20 +25,28 @@
 
 DOCUMENTATION = '''
 ---
-module: packet_project
-short_description: Create/delete a project in Packet
+module: packet_sshkey
+short_description: Create/delete a SSH key in Packet
 description:
-    - Create or delete a project in Packet's bare metal cloud.
+    - Create or delete a SSH key for the current user in Packet
 notes:
     - check_mode is supported.
 version_added: "2.1"
 author: "Niels Grewe, @ngrewe"
 requirements:
     - Requires the packet-python library
+    - If sshpubkeys is installed, it will be used to validate the keys prior
+      to sending them to the other end.
 options:
-    name:
+    label:
         description:
-            - The name of the project to manipulate
+            - The label of the key to manipulate
+        required: true
+        default: null
+        aliases: [ 'name' ]
+    ssh_pub_key:
+        description:
+            - The public SSH key you want to add/remove for the user
         required: true
         default: null
     auth_token:
@@ -49,40 +57,45 @@ options:
         aliases: [ 'api_token' ]
     state:
         description:
-            - Determines whether the project should or should not exist
+            - Determines whether the key should be present or removed
         default: 'present'
         choices: [ 'present', 'absent' ]
-
 '''
 
 EXAMPLES = '''
-- packet_project:
-    name: foo
+- packet_sshkey:
+    label: my_key
+    ssh_pub_key: 'ssh-rsa DEADBEEF...'
     state: present
     auth_token: XYZ
 '''
 
 RETURN = '''
 id:
-    description: The UUID identifying the project
-    returned: when the project exists
+    description: The UUID identifying the ssh key
+    returned: when the key exists
     type: string
     sample: "e22ee691-9c3e-4b71-a45c-07a3c3190f96"
-name:
-    description: The name of the project
-    returned: when the project exists
+label:
+    description: The label assigned to the key
+    returned: when the key exists
     type: string
     sample: "foo"
 created_at:
-    description: Timestamp when the project was created
-    returned: when the project exists
+    description: Timestamp when the key was created
+    returned: when the key exists
     type: string
     sample: "2016-06-01T12:00:00Z"
 updated_at:
-    description: Timestamp when the project was last changed
-    returned: when the project exists
+    description: Timestamp when the key was last changed
+    returned: when the key exists
     type: string
     sample: "2016-06-01T12:00:00Z"
+fingerprint:
+    description: The fingerprint of the key
+    returned: when the key exists
+    type: string
+    sample: "74:f6:47:91:78:a2:c7:1e:ef:73:c9:b3:17:ab:ec:c9"
 '''
 
 # Begin common code applying to all modules
@@ -235,54 +248,73 @@ class PacketModule(AnsibleModule):
 
 class Creation(PacketAction):
 
-    def __init__(self, manager, name):
+    def __init__(self, manager, label, key):
         self._manager = manager
-        self._name = name
+        self._label = label
+        self._key = key
         super(Creation, self).__init__()
 
     def apply(self):
-        return self._manager.create_project(self._name)
+        return self._manager.create_ssh_key(self._label, self._key)
+
+
+class Update(PacketAction):
+
+    def __init__(self, key, label):
+        self._key = key
+        self._label = label
+        super(Update, self).__init__()
+
+    def apply(self):
+        self._key.label = self._label
+        self._key.update()
+        return self._key
 
 
 class Deletion(PacketAction):
 
-    def __init__(self, project):
-        self._project = project
+    def __init__(self, key):
+        self._key = key
         super(Deletion, self).__init__()
 
     def apply(self):
-        self._project.delete()
+        self._key.delete()
 
 
-class PacketProjectModule(PacketModule):
+class PacketSSHKeyModule(PacketModule):
     def __init__(self, *args, **kwargs):
         spec = kwargs.get('argument_spec')
         if spec is None:
             spec = dict()
-        spec.update(name=dict(required=True),
+        spec.update(label=dict(required=True, aliases=['name']),
+                    ssh_pub_key=dict(required=True),
                     state=dict(default='present',
                     choices=['present', 'absent']),
                     )
         kwargs['supports_check_mode'] = True
         kwargs['argument_spec'] = spec
-        super(PacketProjectModule, self).__init__(*args, **kwargs)
+        super(PacketSSHKeyModule, self).__init__(*args, **kwargs)
 
     def list_entities(self):
-        return self.manager.list_projects()
+        return self.manager.list_ssh_keys()
 
     def matched_entities(self, entities):
-        return [x for x in entities if x.name == self.params['name']]
+        return [x for x in entities if x.key == self.params['ssh_pub_key']]
 
     def action_for_entity(self, entity):
         if (self.params['state'] == 'present' and not entity):
-            return Creation(self.manager, self.params['name'])
+            return Creation(self.manager, self.params['label'],
+                            self.params['ssh_pub_key'])
+        elif (self.params['state'] == 'present'
+              and entity.label != self.params['label']):
+            return Update(entity, self.params['label'])
         elif (self.params['state'] == 'absent' and entity):
             return Deletion(entity)
         return None
 
 
 def main():
-    PacketProjectModule().execute_module()
+    PacketSSHKeyModule().execute_module()
 
 
 if __name__ == '__main__':
