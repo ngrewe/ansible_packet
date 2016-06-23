@@ -100,6 +100,7 @@ fingerprint:
 
 # Begin common code applying to all modules
 from ansible.module_utils.basic import AnsibleModule
+from operator import attrgetter
 try:
     import packet
     HAS_PACKET = True

@@ -93,6 +93,7 @@ updated_at:
 
 # Begin common code applying to all modules
 from ansible.module_utils.basic import AnsibleModule
+from operator import attrgetter
 try:
     import packet
     HAS_PACKET = True
@@ -294,8 +295,6 @@ class PacketModule(AnsibleModule):
         self.exit_json(changed=True, **result)
 
 # End common code applying to all modules
-
-from operator import attrgetter
 
 
 class Creation(PacketAction):
