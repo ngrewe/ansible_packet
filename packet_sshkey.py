@@ -170,6 +170,25 @@ class PacketAction(object):
         raise NotImplementedError
 
 
+class PacketByIdLookup(AnsibleModule):
+
+    def __init__(self, *args, **kwargs):
+        spec = kwargs.get('argument_spec')
+        if spec is None:
+            spec = dict()
+            kwargs['argument_spec'] = spec
+        if 'id' not in spec:
+            spec.update(id=dict())
+        super(PacketByIdLookup, self).__init__(*args, **kwargs)
+
+    def entity_by_id(self):
+        """Return the entity mentiond in id using the packet API
+
+        Subclasses must override this method.
+        """
+        raise NotImplementedError
+
+
 class PacketModule(AnsibleModule):
 
     def __init__(self, *args, **kwargs):
@@ -238,20 +257,28 @@ class PacketModule(AnsibleModule):
         if not self.is_packet_supported():
             self.fail_json(msg="packet-python not installed")
 
-        try:
-            entities = self.list_entities()
-        except packet.baseapi.Error as e:
-            self.fail_json(msg=str(e))
-
-        matches = self.matched_entities(entities)
-        if (len(matches) > 1):
-            self.fail_json(msg="Named entity not unique", choices=matches)
-        elif not matches:
-            matched = None
-            result = dict()
+        matched = None
+        if (isinstance(self, PacketByIdLookup) and 'id' in self.params
+                and self.params['id']):
+            try:
+                matched = self.entity_by_id()
+            except packet.baseapi.Error as e:
+                self.fail_json(msg=str(e))
         else:
-            matched = matches[0]
-            result = PacketProperties.to_ansible(matches[0])
+            try:
+                entities = self.list_entities()
+            except packet.baseapi.Error as e:
+                self.fail_json(msg=str(e))
+
+            matches = self.matched_entities(entities)
+            if (len(matches) > 1):
+                self.fail_json(msg="Named entity not unique", choices=matches)
+            elif not matches:
+                matched = None
+            else:
+                matched = matches[0]
+
+        result = PacketProperties.to_ansible(matched)
         action = self.action_for_entity(matched)
 
         if self.check_mode or not action:
