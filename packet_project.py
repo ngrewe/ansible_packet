@@ -110,19 +110,39 @@ class PacketProperties(object):
                 'updated_at',
                 'key',
                 'fingerprint'
+                ),
+            packet.Device.Device: (
+                'id',
+                'hostname',
+                'user_data',
+                'locked',
+                'tags',
+                'created_at',
+                'updated_at',
+                'state',
+                'ip_addresses',
+                'plan'
+                ),
+            packet.OperatingSystem.OperatingSystem: (
+                'slug',
+                'name',
+                'distro',
+                'version'
                 )
             }
     else:
         mapping = dict()
 
     @classmethod
-    def to_ansible(self, obj):
+    def to_ansible(self, obj, inner=False):
         """Convert an packet API object into a dictionary presentation"""
+        if inner and not isinstance(obj, packet.baseapi.BaseAPI):
+            return obj
         try:
             properties = self.mapping[type(obj)]
         except KeyError:
             properties = dict()
-        return dict((name, getattr(obj, name))
+        return dict((name, self.to_ansible(getattr(obj, name), inner=True))
                     for name in dir(obj)
                     if name in properties)
 
