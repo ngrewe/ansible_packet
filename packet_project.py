@@ -36,6 +36,12 @@ author: "Niels Grewe, @ngrewe"
 requirements:
     - Requires the packet-python library
 options:
+    id:
+        description:
+            - >
+                The UUID of the project. If this property is used to identify
+                the project, the module cannot automatically create it
+        required: false
     name:
         description:
             - The name of the project to manipulate
@@ -158,7 +164,13 @@ class PacketAction(object):
 
 
 class PacketByIdLookup(AnsibleModule):
+    """Allow API entities to be loaded by ID
 
+    This mixin allows classes to declare that they support loading and
+    manipulating objects by ID. The id argument is automatically added, but the
+    subclass still needs to implement entity_by_id and set the required_one_of
+    kwarg as needed.
+    """
     def __init__(self, *args, **kwargs):
         spec = kwargs.get('argument_spec')
         if spec is None:
@@ -250,7 +262,11 @@ class PacketModule(AnsibleModule):
             try:
                 matched = self.entity_by_id()
             except packet.baseapi.Error as e:
-                self.fail_json(msg=str(e))
+                # we need to convert a 404
+                if (attrgetter('cause.response.status_code')(e) == 404):
+                    matched = None
+                else:
+                    self.fail_json(msg=str(e))
         else:
             try:
                 entities = self.list_entities()
@@ -279,6 +295,8 @@ class PacketModule(AnsibleModule):
 
 # End common code applying to all modules
 
+from operator import attrgetter
+
 
 class Creation(PacketAction):
 
@@ -301,7 +319,20 @@ class Deletion(PacketAction):
         self._project.delete()
 
 
-class PacketProjectModule(PacketModule):
+class Update(PacketAction):
+
+    def __init__(self, project, name):
+        self._project = project
+        self._name = name
+        super(Update, self).__init__()
+
+    def apply(self):
+        self._project.name = self._name
+        self._project.update()
+        return self._project
+
+
+class PacketProjectModule(PacketModule, PacketByIdLookup):
     def __init__(self, *args, **kwargs):
         spec = kwargs.get('argument_spec')
         if spec is None:
@@ -314,6 +345,9 @@ class PacketProjectModule(PacketModule):
         kwargs['argument_spec'] = spec
         super(PacketProjectModule, self).__init__(*args, **kwargs)
 
+    def entity_by_id(self):
+        return self.manager.get_project(self.params['id'])
+
     def list_entities(self):
         return self.manager.list_projects()
 
@@ -322,9 +356,14 @@ class PacketProjectModule(PacketModule):
 
     def action_for_entity(self, entity):
         if (self.params['state'] == 'present' and not entity):
+            if self.params['id']:
+                self.fail_json(msg='Unable to create project with explicit ID')
             return Creation(self.manager, self.params['name'])
         elif (self.params['state'] == 'absent' and entity):
             return Deletion(entity)
+        elif (self.params['state'] == 'present'
+              and entity.name != self.params['name']):
+            return Update(entity, self.params['name'])
         return None
 
 

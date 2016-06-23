@@ -171,7 +171,13 @@ class PacketAction(object):
 
 
 class PacketByIdLookup(AnsibleModule):
+    """Allow API entities to be loaded by ID
 
+    This mixin allows classes to declare that they support loading and
+    manipulating objects by ID. The id argument is automatically added, but the
+    subclass still needs to implement entity_by_id and set the required_one_of
+    kwarg as needed.
+    """
     def __init__(self, *args, **kwargs):
         spec = kwargs.get('argument_spec')
         if spec is None:
@@ -263,7 +269,11 @@ class PacketModule(AnsibleModule):
             try:
                 matched = self.entity_by_id()
             except packet.baseapi.Error as e:
-                self.fail_json(msg=str(e))
+                # we need to convert a 404
+                if (attrgetter('cause.response.status_code')(e) == 404):
+                    matched = None
+                else:
+                    self.fail_json(msg=str(e))
         else:
             try:
                 entities = self.list_entities()
