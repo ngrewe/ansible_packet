@@ -103,6 +103,13 @@ options:
         choices: [ 'yes', 'no' ]
     user_data:
         description: Userdata you want to process during provisioning
+    wait_for:
+        description:
+            - >
+                integer, if set to a positive, non-zero value, the number of
+                seconds to wait the device to be successfully provisioned.
+        default: 0
+        required: false
 '''
 
 EXAMPLES = '''
@@ -122,6 +129,9 @@ RETURN = '''
 # Begin common code applying to all modules
 from ansible.module_utils.basic import AnsibleModule
 from operator import attrgetter
+from sched import scheduler
+import time
+
 try:
     import packet
     HAS_PACKET = True
@@ -156,6 +166,7 @@ class PacketProperties(object):
                 'updated_at',
                 'state',
                 'ip_addresses',
+                'operating_system',
                 'plan'
                 ),
             packet.OperatingSystem.OperatingSystem: (
@@ -171,7 +182,8 @@ class PacketProperties(object):
     @classmethod
     def to_ansible(self, obj, inner=False):
         """Convert an packet API object into a dictionary presentation"""
-        if inner and not isinstance(obj, packet.baseapi.BaseAPI):
+        if (inner and not isinstance(obj, packet.baseapi.BaseAPI) and
+                not isinstance(obj, packet.OperatingSystem.OperatingSystem)):
             return obj
         try:
             properties = self.mapping[type(obj)]
@@ -325,10 +337,86 @@ class PacketModule(AnsibleModule):
 # End common code applying to all modules
 
 
-class Creation(PacketAction):
+class WaitExceededError(Exception):
+    """This error is raised if the device wasn't provisioned in time"""
+
+    def __init__(self, wait, device):
+        super(WaitExceededError, self).__init__()
+        self.device = device
+        self.wait = wait
+
+    def __str__(self):
+        if not self.device:
+            return "device did not become active " \
+                   "within %d seconds" % (self.wait,)
+        return "device '%s' did not become active " \
+               "within %d seconds" % (self.device, self.wait)
+
+    def __repr__(self):
+        if not self.device:
+            return "WaitExceeded(None > %ds)" % (self.wait,)
+        return "WaitExceeded('%s' > %ds)" % (self.device, self.wait)
+
+
+class WaitOnDeviceAction(PacketAction):
+    """Superclass of actions that may require waiting on the device state"""
+
+    def __init__(self, manager, wait_for=0):
+        self._wait_seconds = wait_for
+        self._poll = 10  # default to polling every 10 seconds
+        self._manager = manager
+        self._device = None
+        super(WaitOnDeviceAction, self).__init__()
+
+    @property
+    def manager(self):
+        return self._manager
+
+    @property
+    def device(self):
+        return self._device
+
+    @device.setter
+    def device(self, value):
+        self._device = value
+
+    def should_wait(self, from_time):
+        return not self.device or (self.device.state != 'active'
+                                   and (time.time() - from_time
+                                        < self._wait_seconds))
+
+    def perform_inner(self):
+        raise NotImplementedError
+
+    def update_device(self):
+        newDevice = self.manager.get_device(self.device.id)
+        if newDevice:
+            self.device = newDevice
+
+    def wait_on_active(self):
+        s = scheduler(time.time, time.sleep)
+        started_at = time.time()
+        while self.should_wait(started_at):
+            d = max(0, min(self._poll,
+                           self._wait_seconds - (time.time() - started_at)))
+            s.enter(d, 0, lambda that: that.update_device(), (self,))
+            s.run()
+        if (not self.device or self.device.state != 'active'):
+            raise WaitExceededError(self._wait_seconds, self.device)
+
+    def apply(self):
+        self.device = self.perform_inner()
+        if self._wait_seconds > 0 and (not self.device
+                                       or self.device.state != 'active'):
+            self.wait_on_active()
+        return self.device
+
+
+class Creation(WaitOnDeviceAction):
 
     def __init__(self, module):
-        self._manager = module.manager
+        super(Creation, self).__init__(module.manager,
+                                       module.params['wait_for'])
         self._project_id = module.project_id
         self._hostname = module.params['hostname']
         self._plan = module.params['plan']
@@ -337,23 +425,22 @@ class Creation(PacketAction):
         self._billing_cycle = module.params['billing_cycle']
         self._userdata = module.params['user_data']
         self._locked = module.params['locked']
-        super(Creation, self).__init__()
 
-    def apply(self):
-        return self._manager.create_device(self._project_id,
-                                           self._hostname, self._plan,
-                                           self._facility,
-                                           self._operating_system,
-                                           self._billing_cycle,
-                                           self._userdata,
-                                           self._locked)
+    def perform_inner(self):
+        return self.manager.create_device(self._project_id,
+                                          self._hostname, self._plan,
+                                          self._facility,
+                                          self._operating_system,
+                                          self._billing_cycle,
+                                          self._userdata,
+                                          self._locked)
 
 
 class Deletion(PacketAction):
 
     def __init__(self, device):
-        self._device = device
         super(Deletion, self).__init__()
+        self._device = device
 
     def apply(self):
         self._device.delete()
@@ -362,10 +449,10 @@ class Deletion(PacketAction):
 class Update(PacketAction):
 
     def __init__(self, device, name, locked):
+        super(Update, self).__init__()
         self._device = device
         self._name = name
         self._locked = locked
-        super(Update, self).__init__()
 
     def apply(self):
         self._device.name = self._name
@@ -374,15 +461,25 @@ class Update(PacketAction):
         return self._device
 
 
-class Reboot(PacketAction):
+class Reboot(WaitOnDeviceAction):
 
-    def __init__(self, device):
-        self._device = device
-        super(Reboot, self).__init__()
+    def __init__(self, manager, device, wait_for=0):
+        super(Reboot, self).__init__(manager, wait_for)
+        self.device = device
 
-    def apply(self):
-        self._device.reboot()
-        return self._device
+    def perform_inner(self):
+        self.device.reboot()
+        return self.device
+
+
+class JustWait(WaitOnDeviceAction):
+
+    def __init__(self, manager, device, wait_for=0):
+        super(JustWait, self).__init__(manager, wait_for)
+        self.device = device
+
+    def perform_inner(self):
+        return self.device
 
 
 class ActionList(PacketAction):
@@ -418,7 +515,8 @@ class PacketDeviceModule(PacketModule, PacketByIdLookup):
                     operating_system=dict(),
                     plan=dict(),
                     project_id=dict(),
-                    project_name=dict()
+                    project_name=dict(),
+                    wait_for=dict(type='int', default=0)
                     )
         kwargs['supports_check_mode'] = True
         kwargs['argument_spec'] = spec
@@ -471,6 +569,9 @@ class PacketDeviceModule(PacketModule, PacketByIdLookup):
             if self.params['id']:
                 self.fail_json(msg='Unable to create project with explicit ID')
             return Creation(self)
+        elif (self.params['state'] == 'present' and entity and
+              self.params['wait_for'] > 0 and entity.state != 'active'):
+            return JustWait(self.manager, entity, self.params['wait_for'])
         elif (self.params['state'] == 'absent' and entity):
             return Deletion(entity)
         elif (self.params['state'] in ['present', 'rebooted']
@@ -479,7 +580,8 @@ class PacketDeviceModule(PacketModule, PacketByIdLookup):
             actions.append(Update(entity, self.params['hostname'],
                                   self.params['locked']))
         if self.params['state'] == 'rebooted':
-            actions.append(Reboot(entity))
+            actions.append(Reboot(self.manager, entity,
+                                  self.params['wait_for']))
 
         if actions:
             return ActionList(actions)
@@ -487,7 +589,14 @@ class PacketDeviceModule(PacketModule, PacketByIdLookup):
 
 
 def main():
-    PacketDeviceModule().execute_module()
+    module = PacketDeviceModule()
+    try:
+        module.execute_module()
+    except WaitExceededError as e:
+        #  WaitExceededError is raised if we were asked to wait for the device
+        #  to become active, but it didn't get provisioned/rebooted in time
+        module.fail_json(msg=str(e),
+                         device=PacketProperties.to_ansible(e.device))
 
 
 if __name__ == '__main__':
