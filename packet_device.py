@@ -31,7 +31,7 @@ description:
     - Create or remove a device in Packet's bare metal cloud.
 notes:
     - check_mode is supported.
-version_added: "2.1"
+version_added: "2.2"
 author: "Niels Grewe, @ngrewe"
 requirements:
     - Requires the packet-python library
@@ -41,6 +41,7 @@ options:
           - The ID of the project that the device should be assigned to
           - either project_id or project_name are required.
     project_name:
+        description:
           - The ID name the project that the device should be assigned to
           - either project_id or project_name are required.
 
@@ -146,16 +147,14 @@ class PacketProperties(object):
                 'id',
                 'name',
                 'created_at',
-                'updated_at'
-                ),
+                'updated_at'),
             packet.SSHKey.SSHKey: (
                 'id',
                 'label',
                 'created_at',
                 'updated_at',
                 'key',
-                'fingerprint'
-                ),
+                'fingerprint'),
             packet.Device.Device: (
                 'id',
                 'hostname',
@@ -167,15 +166,12 @@ class PacketProperties(object):
                 'state',
                 'ip_addresses',
                 'operating_system',
-                'plan'
-                ),
+                'plan'),
             packet.OperatingSystem.OperatingSystem: (
                 'slug',
                 'name',
                 'distro',
-                'version'
-                )
-            }
+                'version')}
     else:
         mapping = dict()
 

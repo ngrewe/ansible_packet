@@ -31,7 +31,7 @@ description:
     - Create or delete a SSH key for the current user in Packet
 notes:
     - check_mode is supported.
-version_added: "2.1"
+version_added: "2.2"
 author: "Niels Grewe, @ngrewe"
 requirements:
     - Requires the packet-python library
@@ -115,16 +115,14 @@ class PacketProperties(object):
                 'id',
                 'name',
                 'created_at',
-                'updated_at'
-                ),
+                'updated_at'),
             packet.SSHKey.SSHKey: (
                 'id',
                 'label',
                 'created_at',
                 'updated_at',
                 'key',
-                'fingerprint'
-                ),
+                'fingerprint'),
             packet.Device.Device: (
                 'id',
                 'hostname',
@@ -136,15 +134,12 @@ class PacketProperties(object):
                 'state',
                 'ip_addresses',
                 'operating_system',
-                'plan'
-                ),
+                'plan'),
             packet.OperatingSystem.OperatingSystem: (
                 'slug',
                 'name',
                 'distro',
-                'version'
-                )
-            }
+                'version')}
     else:
         mapping = dict()
 
