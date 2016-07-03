@@ -128,6 +128,7 @@ class PacketProperties(object):
                 'updated_at',
                 'state',
                 'ip_addresses',
+                'operating_system',
                 'plan'
                 ),
             packet.OperatingSystem.OperatingSystem: (
@@ -143,7 +144,8 @@ class PacketProperties(object):
     @classmethod
     def to_ansible(self, obj, inner=False):
         """Convert an packet API object into a dictionary presentation"""
-        if inner and not isinstance(obj, packet.baseapi.BaseAPI):
+        if (inner and not isinstance(obj, packet.baseapi.BaseAPI) and
+                not isinstance(obj, packet.OperatingSystem.OperatingSystem)):
             return obj
         try:
             properties = self.mapping[type(obj)]
