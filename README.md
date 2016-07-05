@@ -53,7 +53,8 @@ Known issues
 
 License
 -------
-This software is released under the MIT license.
+This software is licensed both under the GNU General Public License v3 or later,
+and under the MIT license. You may choose a license at your discretion.
 
 Copyright (c) 2016 Niels Grewe
 
